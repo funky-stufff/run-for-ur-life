@@ -19,8 +19,8 @@ let botStuckFrames = 0;
 // Weapons / combat
 let pepperCooldown = 0;
 let gunCooldown = 0;
-const PEPPER_COOLDOWN_TIME = 5; // seconds
-const GUN_COOLDOWN_TIME = 8; // seconds
+const PEPPER_COOLDOWN_TIME = 12; // seconds
+const GUN_COOLDOWN_TIME = 12; // seconds
 const PEPPER_RANGE = 6;
 const GUN_RANGE = 25;
 const PEPPER_STUN_TIME = 2.5;
