@@ -31,7 +31,6 @@ const timeValueEl = document.getElementById("timeValue");
 const statusValueEl = document.getElementById("statusValue");
 const finalScoreEl = document.getElementById("finalScore");
 
-// Optional: custom face texture + sound
 // Put your face image at ./assets/face.png and sounds in ./assets/
 const ASSETS = {
   faceTexture: "./assets/face.png",
