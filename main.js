@@ -14,6 +14,19 @@ let clock = new THREE.Clock();
 let started = false;
 let elapsedSurvival = 0;
 let gameOver = false;
+let botStuckFrames = 0;
+
+// Weapons / combat
+let pepperCooldown = 0;
+let gunCooldown = 0;
+const PEPPER_COOLDOWN_TIME = 5; // seconds
+const GUN_COOLDOWN_TIME = 8; // seconds
+const PEPPER_RANGE = 6;
+const GUN_RANGE = 25;
+const PEPPER_STUN_TIME = 2.5;
+const GUN_STUN_TIME = 4;
+let botStunTimer = 0;
+let botVelocity = new THREE.Vector3();
 
 // Simple manual first-person look state
 let yaw = 0;
@@ -30,6 +43,11 @@ let joystickDir = { x: 0, y: 0 };
 const timeValueEl = document.getElementById("timeValue");
 const statusValueEl = document.getElementById("statusValue");
 const finalScoreEl = document.getElementById("finalScore");
+const pepperCooldownLabel = document.getElementById("pepperCooldownLabel");
+const gunCooldownLabel = document.getElementById("gunCooldownLabel");
+const weaponsHudEl = document.getElementById("weaponsHud");
+const pepperButtonEl = document.getElementById("pepperButton");
+const gunButtonEl = document.getElementById("gunButton");
 
 // Put your face image at ./assets/face.png and sounds in ./assets/
 const ASSETS = {
@@ -37,9 +55,12 @@ const ASSETS = {
   chaseSound: "./assets/chase.mp3",
   endSound: "./assets/end.mp3",
   kissSound: "./assets/kiss-sfx.mp3",
+  spraySound: "./assets/spray.mp3",
+  gunSound: "./assets/gunshot.mp3",
+  screamSound: "./assets/scream.mp3",
 };
 
-let audioListener, chaseSound, endSound, kissSound;
+let audioListener, chaseSound, endSound, kissSound, spraySound, gunSound, screamSound;
 
 init();
 
@@ -89,7 +110,12 @@ function init() {
   chaseSound = new THREE.Audio(audioListener);
   endSound = new THREE.Audio(audioListener);
   kissSound = new THREE.Audio(audioListener);
+  spraySound = new THREE.Audio(audioListener);
+  gunSound = new THREE.Audio(audioListener);
+  screamSound = new THREE.Audio(audioListener);
+
   const audioLoader = new THREE.AudioLoader();
+
   audioLoader.load(
     ASSETS.chaseSound,
     (buffer) => {
@@ -127,6 +153,45 @@ function init() {
     undefined,
     () => {
       console.warn("Kiss sound not found, skipping audio.");
+    }
+  );
+
+  audioLoader.load(
+    ASSETS.spraySound,
+    (buffer) => {
+      spraySound.setBuffer(buffer);
+      spraySound.setLoop(false);
+      spraySound.setVolume(0.9);
+    },
+    undefined,
+    () => {
+      console.warn("Spray sound not found, skipping audio.");
+    }
+  );
+
+  audioLoader.load(
+    ASSETS.gunSound,
+    (buffer) => {
+      gunSound.setBuffer(buffer);
+      gunSound.setLoop(false);
+      gunSound.setVolume(1.0);
+    },
+    undefined,
+    () => {
+      console.warn("Gun sound not found, skipping audio.");
+    }
+  );
+
+  audioLoader.load(
+    ASSETS.screamSound,
+    (buffer) => {
+      screamSound.setBuffer(buffer);
+      screamSound.setLoop(false);
+      screamSound.setVolume(0.9);
+    },
+    undefined,
+    () => {
+      console.warn("Scream sound not found, skipping audio.");
     }
   );
 
@@ -168,6 +233,12 @@ function init() {
       case "ArrowRight":
       case "KeyD":
         moveRight = true;
+        break;
+      case "KeyQ":
+        triggerPepperSpray();
+        break;
+      case "KeyE":
+        triggerGun();
         break;
     }
   };
@@ -211,6 +282,32 @@ function init() {
   // Touch controls (mobile): virtual joystick + swipe look
   if (isTouchDevice) {
     setupTouchControls();
+
+    // Show mobile weapon buttons and hook them up
+    const mobileWeapons = document.getElementById("mobileWeapons");
+    if (mobileWeapons) {
+      mobileWeapons.style.display = "flex";
+    }
+    // Hide numeric cooldown HUD on mobile; we use fill-based buttons instead.
+    if (weaponsHudEl) {
+      weaponsHudEl.style.display = "none";
+    }
+    if (pepperButtonEl) {
+      const firePepper = (e) => {
+        e.preventDefault();
+        triggerPepperSpray();
+      };
+      pepperButtonEl.addEventListener("touchstart", firePepper, { passive: false });
+      pepperButtonEl.addEventListener("click", firePepper);
+    }
+    if (gunButtonEl) {
+      const fireGun = (e) => {
+        e.preventDefault();
+        triggerGun();
+      };
+      gunButtonEl.addEventListener("touchstart", fireGun, { passive: false });
+      gunButtonEl.addEventListener("click", fireGun);
+    }
   }
 
   if (retryButton) {
@@ -423,6 +520,13 @@ function restartGame() {
     bot.position.set(0, 1, -15);
   }
 
+  // Reset combat state
+  pepperCooldown = 0;
+  gunCooldown = 0;
+  botStunTimer = 0;
+  botVelocity.set(0, 0, 0);
+  updateWeaponHud();
+
   const gameOverOverlay = document.getElementById("gameOver");
   if (gameOverOverlay) {
     gameOverOverlay.style.display = "none";
@@ -457,6 +561,12 @@ function animate() {
   const delta = clock.getDelta();
 
   if (started && !gameOver) {
+    // Tick cooldowns and stun
+    if (pepperCooldown > 0) pepperCooldown = Math.max(0, pepperCooldown - delta);
+    if (gunCooldown > 0) gunCooldown = Math.max(0, gunCooldown - delta);
+    if (botStunTimer > 0) botStunTimer = Math.max(0, botStunTimer - delta);
+    updateWeaponHud();
+
     updatePlayer(delta);
     updateBot(delta);
     elapsedSurvival += delta;
@@ -509,12 +619,54 @@ function updateBot(delta) {
 
   const target = camera.position;
   const botPos = bot.position;
-
   const toPlayer = new THREE.Vector3().subVectors(target, botPos);
   const distance = toPlayer.length();
 
   if (distance < 1.5 && !gameOver) {
     endGame();
+    return;
+  }
+
+  // If stunned, just apply lingering knockback velocity and skip chasing
+  if (botStunTimer > 0) {
+    if (botVelocity.lengthSq() > 0.0001) {
+      const nextPos = new THREE.Vector3().copy(botPos).addScaledVector(botVelocity, delta);
+
+      const botRadius = 1.1;
+      const botHeight = 2.0;
+      const botBox = new THREE.Box3(
+        new THREE.Vector3(
+          nextPos.x - botRadius,
+          nextPos.y - botHeight * 0.5,
+          nextPos.z - botRadius
+        ),
+        new THREE.Vector3(
+          nextPos.x + botRadius,
+          nextPos.y + botHeight * 0.5,
+          nextPos.z + botRadius
+        )
+      );
+
+      let blocked = false;
+      for (const obs of obstacles) {
+        const obsBox = new THREE.Box3().setFromObject(obs);
+        if (obsBox.intersectsBox(botBox)) {
+          blocked = true;
+          break;
+        }
+      }
+
+      if (!blocked) {
+        botPos.copy(nextPos);
+      }
+
+      // simple damping so it slows down
+      botVelocity.multiplyScalar(0.9);
+    }
+
+    // Bot still faces player even while stunned
+    bot.lookAt(target.x, bot.position.y, target.z);
+    bot.position.y = 1 + Math.sin(performance.now() * 0.004) * 0.1;
     return;
   }
 
@@ -530,31 +682,125 @@ function updateBot(delta) {
     chaseSound.setVolume(vol);
   }
 
-  toPlayer.normalize();
-
   const currentSpeed = botSpeed + elapsedSurvival * 0.15;
-  const moveStep = new THREE.Vector3().copy(toPlayer).multiplyScalar(currentSpeed * delta);
-  const nextPos = new THREE.Vector3().copy(botPos).add(moveStep);
+  const baseDir = toPlayer.normalize();
 
-  // Simple collision against walls/columns using bounding boxes
-  let blocked = false;
+  // Try moving directly toward the player; if blocked, try wider offset angles around them
+  const tryDirections = [0, 0.9, -0.9, 1.6, -1.6]; // radians (~0°, ±50°, ±90°)
   const botRadius = 1.1;
   const botHeight = 2.0;
-  const botBox = new THREE.Box3(
-    new THREE.Vector3(nextPos.x - botRadius, nextPos.y - botHeight * 0.5, nextPos.z - botRadius),
-    new THREE.Vector3(nextPos.x + botRadius, nextPos.y + botHeight * 0.5, nextPos.z + botRadius)
-  );
+  let moved = false;
 
-  for (const obs of obstacles) {
-    const obsBox = new THREE.Box3().setFromObject(obs);
-    if (obsBox.intersectsBox(botBox)) {
-      blocked = true;
-      break;
+  for (let i = 0; i < tryDirections.length && !moved; i++) {
+    const angle = tryDirections[i];
+
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const dir = new THREE.Vector3(
+      baseDir.x * cos - baseDir.z * sin,
+      0,
+      baseDir.x * sin + baseDir.z * cos
+    ).normalize();
+
+    const moveStep = new THREE.Vector3().copy(dir).multiplyScalar(currentSpeed * delta);
+    const nextPos = new THREE.Vector3().copy(botPos).add(moveStep);
+
+    const botBox = new THREE.Box3(
+      new THREE.Vector3(
+        nextPos.x - botRadius,
+        nextPos.y - botHeight * 0.5,
+        nextPos.z - botRadius
+      ),
+      new THREE.Vector3(
+        nextPos.x + botRadius,
+        nextPos.y + botHeight * 0.5,
+        nextPos.z + botRadius
+      )
+    );
+
+    let blocked = false;
+    for (const obs of obstacles) {
+      const obsBox = new THREE.Box3().setFromObject(obs);
+      if (obsBox.intersectsBox(botBox)) {
+        blocked = true;
+        break;
+      }
+    }
+
+    if (!blocked) {
+      botPos.copy(nextPos);
+      moved = true;
     }
   }
 
-  if (!blocked) {
-    botPos.copy(nextPos);
+  // If we couldn't move for several frames, nudge the bot out from obstacles
+  if (!moved) {
+    botStuckFrames++;
+    if (botStuckFrames > 20) {
+      let closestObs = null;
+      let closestDistSq = Infinity;
+      const botXZ = new THREE.Vector2(botPos.x, botPos.z);
+
+      for (const obs of obstacles) {
+        const p = obs.position;
+        const obsXZ = new THREE.Vector2(p.x, p.z);
+        const dSq = botXZ.distanceToSquared(obsXZ);
+        if (dSq < closestDistSq) {
+          closestDistSq = dSq;
+          closestObs = obs;
+        }
+      }
+
+      if (closestObs) {
+        const awayDir = new THREE.Vector3().subVectors(botPos, closestObs.position);
+        awayDir.y = 0;
+        if (awayDir.lengthSq() > 0.0001) {
+          awayDir.normalize();
+          // Pop farther away from obstacle, ignoring collisions for this tiny nudge
+          const unstuckDistance = 1.0;
+          botPos.addScaledVector(awayDir, unstuckDistance);
+        }
+      }
+
+      botStuckFrames = 0;
+    }
+  } else {
+    botStuckFrames = 0;
+  }
+
+  // Add any residual knockback velocity when not stunned (very small effect)
+  if (botVelocity.lengthSq() > 0.0001) {
+    const nextPos = new THREE.Vector3().copy(botPos).addScaledVector(botVelocity, delta);
+
+    const botRadius = 1.1;
+    const botHeight = 2.0;
+    const botBox = new THREE.Box3(
+      new THREE.Vector3(
+        nextPos.x - botRadius,
+        nextPos.y - botHeight * 0.5,
+        nextPos.z - botRadius
+      ),
+      new THREE.Vector3(
+        nextPos.x + botRadius,
+        nextPos.y + botHeight * 0.5,
+        nextPos.z + botRadius
+      )
+    );
+
+    let blocked = false;
+    for (const obs of obstacles) {
+      const obsBox = new THREE.Box3().setFromObject(obs);
+      if (obsBox.intersectsBox(botBox)) {
+        blocked = true;
+        break;
+      }
+    }
+
+    if (!blocked) {
+      botPos.copy(nextPos);
+    }
+
+    botVelocity.multiplyScalar(0.9);
   }
 
   // Make bot face the player
@@ -562,6 +808,358 @@ function updateBot(delta) {
 
   // Small bobbing for creepiness
   bot.position.y = 1 + Math.sin(performance.now() * 0.004) * 0.1;
+}
+
+function triggerPepperSpray() {
+  if (!bot || gameOver || !started) return;
+  if (pepperCooldown > 0) return;
+
+  const toBot = new THREE.Vector3().subVectors(bot.position, camera.position);
+  const distance = toBot.length();
+
+  // Always consume the spray and show the effect, even if it misses
+  pepperCooldown = PEPPER_COOLDOWN_TIME;
+  spawnPepperSprayEffect(Math.min(distance, PEPPER_RANGE));
+
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.y = 0;
+  forward.normalize();
+
+  toBot.y = 0;
+  toBot.normalize();
+
+  const dot = forward.dot(toBot);
+  const inRange = distance <= PEPPER_RANGE;
+  const inCone = dot >= Math.cos((45 * Math.PI) / 180);
+
+  // If out of range or not in front, the spray is "wasted" – no effect on bot.
+  if (!inRange || !inCone) {
+    // Still play spray SFX when firing, even on a miss
+    if (spraySound && spraySound.buffer) {
+      if (spraySound.isPlaying) {
+        spraySound.stop();
+      }
+      // Skip the first 0.2s of the clip
+      spraySound.offset = 0.2;
+      spraySound.play();
+    }
+    return;
+  }
+
+  // Apply knockback away from player and stun
+  const knockDir = new THREE.Vector3().subVectors(bot.position, camera.position);
+  knockDir.y = 0;
+  if (knockDir.lengthSq() > 0.0001) {
+    knockDir.normalize();
+    botVelocity.copy(knockDir).multiplyScalar(12);
+  }
+
+  botStunTimer = PEPPER_STUN_TIME;
+
+  spawnBotHitEffect(false);
+
+  // Play spray SFX, skipping the first 0.2s of the clip
+  if (spraySound && spraySound.buffer) {
+    if (spraySound.isPlaying) {
+      spraySound.stop();
+    }
+    spraySound.offset = 0.2;
+    spraySound.play();
+  }
+
+  // Visual already spawned above in trigger call
+}
+
+function triggerGun() {
+  if (!bot || gameOver || !started) return;
+  if (gunCooldown > 0) return;
+
+  const toBot = new THREE.Vector3().subVectors(bot.position, camera.position);
+  const distance = toBot.length();
+  if (distance > GUN_RANGE) return;
+
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.y = 0;
+  forward.normalize();
+
+  toBot.y = 0;
+  toBot.normalize();
+
+  const dot = forward.dot(toBot);
+  if (dot < Math.cos((30 * Math.PI) / 180)) {
+    // not tightly in front (narrower cone than pepper spray)
+    return;
+  }
+
+  // Stronger knockback and longer stun
+  const knockDir = new THREE.Vector3().subVectors(bot.position, camera.position);
+  knockDir.y = 0;
+  if (knockDir.lengthSq() > 0.0001) {
+    knockDir.normalize();
+    botVelocity.copy(knockDir).multiplyScalar(24);
+  }
+
+  botStunTimer = GUN_STUN_TIME;
+  gunCooldown = GUN_COOLDOWN_TIME;
+
+  spawnGunMuzzleFlash();
+  // Fast visual bullet traveling to the bot's position at the moment of the shot
+  spawnGunBulletEffect(bot.position.clone());
+
+  spawnBotHitEffect(true);
+
+  // Play gunshot SFX
+  if (gunSound && gunSound.buffer) {
+    if (gunSound.isPlaying) {
+      gunSound.stop();
+    }
+    gunSound.play();
+  }
+}
+
+function updateWeaponHud() {
+  if (pepperCooldownLabel) {
+    pepperCooldownLabel.textContent =
+      pepperCooldown > 0 ? `${pepperCooldown.toFixed(1)}s` : "Ready";
+  }
+  if (gunCooldownLabel) {
+    gunCooldownLabel.textContent = gunCooldown > 0 ? `${gunCooldown.toFixed(1)}s` : "Ready";
+  }
+
+   updateMobileWeaponButtons();
+}
+
+function updateMobileWeaponButtons() {
+  if (!isTouchDevice) return;
+
+  const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+  if (pepperButtonEl) {
+    const ratio =
+      PEPPER_COOLDOWN_TIME > 0 ? 1 - pepperCooldown / PEPPER_COOLDOWN_TIME : 1;
+    const fill = clamp01(ratio);
+    pepperButtonEl.style.setProperty("--fill", fill.toString());
+    pepperButtonEl.disabled = pepperCooldown > 0;
+  }
+
+  if (gunButtonEl) {
+    const ratio = GUN_COOLDOWN_TIME > 0 ? 1 - gunCooldown / GUN_COOLDOWN_TIME : 1;
+    const fill = clamp01(ratio);
+    gunButtonEl.style.setProperty("--fill", fill.toString());
+    gunButtonEl.disabled = gunCooldown > 0;
+  }
+}
+
+function spawnPepperSprayEffect(distanceToBot) {
+  if (!scene || !camera) return;
+
+  const origin = new THREE.Vector3().copy(camera.position);
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.normalize();
+
+  const right = new THREE.Vector3().copy(forward).cross(new THREE.Vector3(0, 1, 0)).normalize();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  const maxLen = Math.min(distanceToBot || PEPPER_RANGE, PEPPER_RANGE);
+  const count = 14;
+
+  for (let i = 0; i < count; i++) {
+    const particleGeo = new THREE.SphereGeometry(0.06, 8, 8);
+    const particleMat = new THREE.MeshBasicMaterial({
+      color: 0xffe28a,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const p = new THREE.Mesh(particleGeo, particleMat);
+
+    const offsetRight = (Math.random() - 0.5) * 0.35;
+    const offsetUp = (Math.random() - 0.3) * 0.25;
+    const startPos = new THREE.Vector3()
+      .copy(origin)
+      .addScaledVector(forward, 0.5)
+      .addScaledVector(right, offsetRight)
+      .addScaledVector(up, offsetUp);
+
+    const travel = maxLen * (0.6 + Math.random() * 0.4);
+    const endPos = new THREE.Vector3().copy(origin).addScaledVector(forward, travel);
+
+    p.position.copy(startPos);
+    scene.add(p);
+
+    const lifetime = 220 + Math.random() * 80; // ms
+    const start = performance.now();
+
+    const tick = () => {
+      const now = performance.now();
+      const t = (now - start) / lifetime;
+      if (t >= 1) {
+        scene.remove(p);
+        particleGeo.dispose();
+        particleMat.dispose();
+        return;
+      }
+      p.position.lerpVectors(startPos, endPos, t);
+      particleMat.opacity = 0.9 * (1 - t);
+      requestAnimationFrame(tick);
+    };
+
+    requestAnimationFrame(tick);
+  }
+}
+
+function spawnGunMuzzleFlash() {
+  if (!scene || !camera) return;
+
+  const flashGeo = new THREE.SphereGeometry(0.22, 12, 12);
+  const flashMat = new THREE.MeshBasicMaterial({
+    color: 0xfff6c0,
+    transparent: true,
+    opacity: 1.0,
+  });
+  const flash = new THREE.Mesh(flashGeo, flashMat);
+
+  const origin = new THREE.Vector3().copy(camera.position);
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.normalize();
+
+  origin.addScaledVector(forward, 0.8);
+  flash.position.copy(origin);
+
+  scene.add(flash);
+
+  const lifetime = 90; // ms
+  const start = performance.now();
+
+  const tick = () => {
+    const now = performance.now();
+    const t = (now - start) / lifetime;
+    if (t >= 1) {
+      scene.remove(flash);
+      flashGeo.dispose();
+      flashMat.dispose();
+      return;
+    }
+    flashMat.opacity = 1.0 * (1 - t);
+    requestAnimationFrame(tick);
+  };
+
+  requestAnimationFrame(tick);
+}
+
+function spawnGunBulletEffect(hitPosition) {
+  if (!scene || !camera) return;
+
+  const bulletGeo = new THREE.SphereGeometry(0.08, 10, 10);
+  const bulletMat = new THREE.MeshBasicMaterial({
+    color: 0xfff6c0,
+    emissive: 0xfff6c0,
+    emissiveIntensity: 0.6,
+  });
+  const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+
+  const startPos = new THREE.Vector3().copy(camera.position);
+  const forward = new THREE.Vector3();
+  camera.getWorldDirection(forward);
+  forward.normalize();
+  startPos.addScaledVector(forward, 0.6);
+
+  const endPos = hitPosition
+    ? hitPosition.clone()
+    : new THREE.Vector3().copy(startPos).addScaledVector(forward, GUN_RANGE * 0.8);
+
+  bullet.position.copy(startPos);
+  scene.add(bullet);
+
+  const lifetime = 160; // ms
+  const start = performance.now();
+
+  const tick = () => {
+    const now = performance.now();
+    const t = (now - start) / lifetime;
+    if (t >= 1) {
+      scene.remove(bullet);
+      bulletGeo.dispose();
+      bulletMat.dispose();
+      return;
+    }
+    bullet.position.lerpVectors(startPos, endPos, t);
+    requestAnimationFrame(tick);
+  };
+
+  requestAnimationFrame(tick);
+}
+
+function spawnBotHitEffect(isGun) {
+  if (!scene || !bot) return;
+
+  // Blood splash particles
+  const count = isGun ? 22 : 16;
+  const baseColor = 0x991111;
+  const radius = isGun ? 0.6 : 0.45;
+
+  for (let i = 0; i < count; i++) {
+    const geo = new THREE.SphereGeometry(isGun ? 0.09 : 0.07, 8, 8);
+    const mat = new THREE.MeshBasicMaterial({
+      color: baseColor,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const p = new THREE.Mesh(geo, mat);
+
+    const angle = Math.random() * Math.PI * 2;
+    const up = Math.random() * 0.4 + 0.1;
+    const r = radius * (0.4 + Math.random() * 0.8);
+    const offset = new THREE.Vector3(
+      Math.cos(angle) * r,
+      up,
+      Math.sin(angle) * r
+    );
+
+    const startPos = new THREE.Vector3().copy(bot.position).add(offset);
+    const endPos = new THREE.Vector3()
+      .copy(startPos)
+      .add(
+        new THREE.Vector3(
+          (Math.random() - 0.5) * 0.4,
+          (Math.random() - 0.3) * 0.3,
+          (Math.random() - 0.5) * 0.4
+        )
+      );
+
+    p.position.copy(startPos);
+    scene.add(p);
+
+    const lifetime = isGun ? 280 : 240;
+    const start = performance.now();
+
+    const tick = () => {
+      const now = performance.now();
+      const t = (now - start) / lifetime;
+      if (t >= 1) {
+        scene.remove(p);
+        geo.dispose();
+        mat.dispose();
+        return;
+      }
+      p.position.lerpVectors(startPos, endPos, t);
+      mat.opacity = 0.9 * (1 - t);
+      requestAnimationFrame(tick);
+    };
+
+    requestAnimationFrame(tick);
+  }
+
+  // Play scream SFX when the bot is hit (gun or spray)
+  if (screamSound && screamSound.buffer) {
+    if (screamSound.isPlaying) {
+      screamSound.stop();
+    }
+    screamSound.play();
+  }
 }
 
 function setupTouchControls() {
