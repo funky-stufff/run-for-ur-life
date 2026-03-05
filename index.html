@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Run For Life - Nextbot Style Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at center, #111 0%, #000 60%, #000 100%);
+        color: #f5f5f5;
+        z-index: 10;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      #overlay h1 {
+        font-size: clamp(2rem, 4vw, 3rem);
+        margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+      }
+
+      #overlay p {
+        margin: 0;
+        opacity: 0.8;
+        font-size: 0.9rem;
+        text-align: center;
+        max-width: 420px;
+      }
+
+      #overlay button {
+        padding: 0.6rem 1.4rem;
+        border-radius: 999px;
+        border: none;
+        cursor: pointer;
+        background: linear-gradient(135deg, #ff3366, #ff9900);
+        color: #fff;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.55);
+      }
+
+      #overlay button:hover {
+        filter: brightness(1.1);
+      }
+
+      #gameOver {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at center, #000 0%, #000 60%, #000 100%);
+        color: #f5f5f5;
+        z-index: 12;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      #gameOver h2 {
+        font-size: clamp(1.8rem, 3vw, 2.4rem);
+        margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+
+      #gameOver p {
+        margin: 0;
+        opacity: 0.85;
+        font-size: 0.9rem;
+        text-align: center;
+      }
+
+      #gameOver button {
+        padding: 0.6rem 1.4rem;
+        border-radius: 999px;
+        border: none;
+        cursor: pointer;
+        background: linear-gradient(135deg, #00c6ff, #0072ff);
+        color: #fff;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.55);
+      }
+
+      #gameOver button:hover {
+        filter: brightness(1.1);
+      }
+
+      #hud {
+        position: fixed;
+        top: 1rem;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #f5f5f5;
+        font-size: 0.9rem;
+        text-shadow: 0 0 4px #000;
+        z-index: 5;
+        display: flex;
+        gap: 1.5rem;
+      }
+
+      #hud span.label {
+        opacity: 0.7;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-right: 0.25rem;
+      }
+
+      /* Mobile joystick */
+      #joystick {
+        position: fixed;
+        bottom: 1.5rem;
+        left: 1.5rem;
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        background: radial-gradient(circle at center, rgba(255, 255, 255, 0.08), rgba(0, 0, 0, 0.8));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 6;
+        touch-action: none;
+      }
+
+      #joystick-thumb {
+        width: 55px;
+        height: 55px;
+        border-radius: 50%;
+        background: radial-gradient(circle at center, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.05));
+        box-shadow: 0 0 12px rgba(0, 0, 0, 0.8);
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="overlay">
+      <h1>Run For Life</h1>
+      <p>
+        WASD / Arrow Keys to move, mouse to look. Survive as long as you can
+        while the meme face chases you.
+      </p>
+      <button id="startButton">Click to Start</button>
+    </div>
+
+    <div id="hud">
+      <div><span class="label">Time</span><span id="timeValue">0.0s</span></div>
+      <div><span class="label">Status</span><span id="statusValue">Idle</span></div>
+    </div>
+
+    <!-- Mobile joystick -->
+    <div id="joystick">
+      <div id="joystick-thumb"></div>
+    </div>
+
+    <!-- Game over overlay -->
+    <div id="gameOver">
+      <h2>Shogani the Freakster Caught You 🫦🫢!</h2>
+      <p>
+        You survived <span id="finalScore">0.0</span> seconds.
+      </p>
+      <button id="retryButton">Retry</button>
+    </div>
+
+    <!-- Three.js from CDN -->
+    <script src="https://unpkg.com/three@0.152.2/build/three.min.js"></script>
+
+    <!-- Main game logic -->
+    <script src="./main.js"></script>
+  </body>
+</html>
+
